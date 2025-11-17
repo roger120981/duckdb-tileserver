@@ -53,6 +53,23 @@ WriteTimeoutSec = 30
 # Do not publish these tables as tile layers
 # TableExcludes = [ "temp_table", "staging_data" ]
 
+# Connection pool settings
+# Maximum number of open connections to the database (default: 25)
+# Recommended: 2-4x your CPU cores
+# MaxOpenConns = 25
+
+# Maximum number of idle connections in the pool (default: 5)
+# Recommended: 20-30% of MaxOpenConns
+# MaxIdleConns = 5
+
+# Maximum lifetime of a connection in seconds (default: 3600 = 1 hour)
+# Connections older than this will be closed and recreated
+# ConnMaxLifetime = 3600
+
+# Maximum idle time of a connection in seconds (default: 600 = 10 minutes)
+# Idle connections older than this will be closed
+# ConnMaxIdleTime = 600
+
 [Metadata]
 # Title for this service
 Title = "DuckDB Tileserver"

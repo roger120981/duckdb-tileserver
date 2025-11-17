@@ -1,18 +1,5 @@
 package data
 
-/*
- Copyright 2019 - 2025 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-      http://www.apache.org/licenses/LICENSE-2.0
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
-
 import (
 	"context"
 	"database/sql"
@@ -20,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
@@ -47,13 +35,17 @@ const (
 // CatalogDB is the DuckDB catalog implementation
 type CatalogDB struct {
 	dbconn        *sql.DB
-	dbPath        string            // Store database path for per-request connections
+	dbPath        string // Store database path for per-request connections
 	tableIncludes map[string]string
 	tableExcludes map[string]string
 	tables        []*Table
 	tableMap      map[string]*Table
 	functions     []*Function
 	functionMap   map[string]*Function
+
+	// Layer metadata cache (infinite cache - no expiration)
+	layerMetadataCache map[string]*Layer
+	layerCacheMutex    sync.RWMutex
 }
 
 var isStartup bool
@@ -77,9 +69,11 @@ func newCatalogDB() CatalogDB {
 	dbPath := conf.Configuration.Database.DatabasePath
 	conn := dbConnect()
 	cat := CatalogDB{
-		dbconn: conn,
-		dbPath: dbPath,
+		dbconn:             conn,
+		dbPath:             dbPath,
+		layerMetadataCache: make(map[string]*Layer),
 	}
+	log.Info("Layer metadata cache initialized")
 	return cat
 }
 
@@ -96,6 +90,18 @@ func dbConnect() *sql.DB {
 		log.Fatal(err)
 	}
 
+	// Configure connection pool
+	db.SetMaxOpenConns(conf.Configuration.Database.MaxOpenConns)
+	db.SetMaxIdleConns(conf.Configuration.Database.MaxIdleConns)
+	db.SetConnMaxLifetime(time.Duration(conf.Configuration.Database.ConnMaxLifetime) * time.Second)
+	db.SetConnMaxIdleTime(time.Duration(conf.Configuration.Database.ConnMaxIdleTime) * time.Second)
+
+	log.Infof("Connection pool configured: MaxOpenConns=%d, MaxIdleConns=%d, ConnMaxLifetime=%ds, ConnMaxIdleTime=%ds",
+		conf.Configuration.Database.MaxOpenConns,
+		conf.Configuration.Database.MaxIdleConns,
+		conf.Configuration.Database.ConnMaxLifetime,
+		conf.Configuration.Database.ConnMaxIdleTime)
+
 	// Test the connection
 	err = db.Ping()
 	if err != nil {
@@ -110,28 +116,6 @@ func dbConnect() *sql.DB {
 
 	log.Infof("Connected to DuckDB: %s", dbPath)
 	return db
-}
-
-// createRequestConnection creates a new DuckDB connection for a single request
-func (cat *CatalogDB) createRequestConnection() (*sql.DB, error) {
-	// disallow blank config for safety
-	if cat.dbPath == "" {
-		return nil, fmt.Errorf("blank DuckDB path is disallowed for security reasons")
-	}
-
-	db, err := sql.Open("duckdb", cat.dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("error opening database: %w", err)
-	}
-
-	// Load spatial extension
-	_, err = db.Exec("INSTALL spatial; LOAD spatial;")
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to load spatial extension: %w", err)
-	}
-
-	return db, nil
 }
 
 // GetDB returns the underlying database connection
@@ -156,6 +140,43 @@ func (cat *CatalogDB) SetIncludeExclude(includeList []string, excludeList []stri
 
 func (cat *CatalogDB) Close() {
 	cat.dbconn.Close()
+}
+
+// InvalidateLayerMetadataCache clears the layer metadata cache
+// If layerName is empty, clears the entire cache; otherwise clears specific layer
+func (cat *CatalogDB) InvalidateLayerMetadataCache(layerName string) {
+	cat.layerCacheMutex.Lock()
+	defer cat.layerCacheMutex.Unlock()
+
+	if layerName == "" {
+		// Clear entire cache
+		cat.layerMetadataCache = make(map[string]*Layer)
+		log.Info("Layer metadata cache cleared (all layers)")
+	} else {
+		// Clear specific layer
+		delete(cat.layerMetadataCache, layerName)
+		log.Infof("Layer metadata cache cleared for: %s", layerName)
+	}
+}
+
+// GetLayerMetadataCacheStats returns statistics about the layer metadata cache
+func (cat *CatalogDB) GetLayerMetadataCacheStats() map[string]interface{} {
+	cat.layerCacheMutex.RLock()
+	defer cat.layerCacheMutex.RUnlock()
+
+	return map[string]interface{}{
+		"cached_layers": len(cat.layerMetadataCache),
+		"layers":        getLayerNames(cat.layerMetadataCache),
+	}
+}
+
+// Helper function to get layer names from cache
+func getLayerNames(cache map[string]*Layer) []string {
+	names := make([]string, 0, len(cache))
+	for name := range cache {
+		names = append(names, name)
+	}
+	return names
 }
 
 func (cat *CatalogDB) Tables() ([]*Table, error) {

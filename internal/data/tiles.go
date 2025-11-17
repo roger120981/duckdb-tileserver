@@ -1,18 +1,5 @@
 package data
 
-/*
- Copyright 2019 - 2025 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-      http://www.apache.org/licenses/LICENSE-2.0
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
-
 import (
 	"context"
 	"database/sql"
@@ -32,25 +19,25 @@ type Layer struct {
 	Table          string            `json:"table"`
 	GeometryColumn string            `json:"geometry_column"`
 	GeometryType   string            `json:"geometry_type"`
-	Srid           int               `json:"srid"`           // SRID of bounds (always 3857 for API responses)
-	SourceSrid     int               `json:"-"`              // SRID of source data (not exposed in API)
+	Srid           int               `json:"srid"` // SRID of bounds (always 3857 for API responses)
+	SourceSrid     int               `json:"-"`    // SRID of source data (not exposed in API)
 	Bounds         *Extent           `json:"bounds,omitempty"`
 	Properties     []string          `json:"properties,omitempty"`
-	PropertyTypes  map[string]string `json:"-"`              // Column name -> data type mapping (not exposed in API)
+	PropertyTypes  map[string]string `json:"-"` // Column name -> data type mapping (not exposed in API)
 }
 
 // TileJSON represents the TileJSON specification metadata
 type TileJSON struct {
-	TileJSON    string   `json:"tilejson"`
-	Name        string   `json:"name,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Scheme      string   `json:"scheme,omitempty"`
-	Tiles       []string `json:"tiles"`
-	MinZoom     int      `json:"minzoom,omitempty"`
-	MaxZoom     int      `json:"maxzoom,omitempty"`
-	Bounds      []float64 `json:"bounds,omitempty"`
-	Center      []float64 `json:"center,omitempty"`
+	TileJSON     string        `json:"tilejson"`
+	Name         string        `json:"name,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	Version      string        `json:"version,omitempty"`
+	Scheme       string        `json:"scheme,omitempty"`
+	Tiles        []string      `json:"tiles"`
+	MinZoom      int           `json:"minzoom,omitempty"`
+	MaxZoom      int           `json:"maxzoom,omitempty"`
+	Bounds       []float64     `json:"bounds,omitempty"`
+	Center       []float64     `json:"center,omitempty"`
 	VectorLayers []VectorLayer `json:"vector_layers,omitempty"`
 }
 
@@ -306,8 +293,38 @@ func (cat *CatalogDB) isTableIncluded(tableName string) bool {
 }
 
 // GetLayerByName returns a single layer by name with lightweight metadata for tile generation
-// This does NOT calculate bounds to avoid expensive ST_Extent queries on every tile request
+// Uses an in-memory cache to avoid repeated metadata queries
 func (cat *CatalogDB) GetLayerByName(name string) (*Layer, error) {
+	// Try cache first (fast path with read lock)
+	cat.layerCacheMutex.RLock()
+	cached, ok := cat.layerMetadataCache[name]
+	cat.layerCacheMutex.RUnlock()
+
+	if ok {
+		log.Debugf("Layer metadata cache HIT: %s", name)
+		return cached, nil
+	}
+
+	log.Debugf("Layer metadata cache MISS: %s", name)
+
+	// Cache miss - query database
+	layer, err := cat.queryLayerMetadata(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache (write lock)
+	cat.layerCacheMutex.Lock()
+	cat.layerMetadataCache[name] = layer
+	cat.layerCacheMutex.Unlock()
+
+	log.Debugf("Layer metadata cached: %s", name)
+
+	return layer, nil
+}
+
+// queryLayerMetadata queries the database for layer metadata (not cached)
+func (cat *CatalogDB) queryLayerMetadata(name string) (*Layer, error) {
 	// Query for just this specific table's geometry column
 	query := `
 		SELECT column_name as geometry_column
@@ -392,19 +409,15 @@ func (cat *CatalogDB) GetLayerByName(name string) (*Layer, error) {
 }
 
 // GenerateTile generates an MVT tile for the given layer and tile coordinates
-// Uses a dedicated database connection per request to avoid connection pool contention
+// Uses the shared connection pool for efficient resource management
 func (cat *CatalogDB) GenerateTile(ctx context.Context, layerName string, z, x, y int) ([]byte, error) {
 	layer, err := cat.GetLayerByName(layerName)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create a dedicated database connection for this tile request
-	db, err := cat.createRequestConnection()
-	if err != nil {
-		return nil, fmt.Errorf("error creating request connection: %w", err)
-	}
-	defer db.Close()
+	// Use the shared connection pool (connection is automatically acquired and released)
+	db := cat.dbconn
 
 	// Build the SQL query using ST_AsMVT following the Python reference implementation
 	// https://github.com/bmcandr/fast-geoparquet-features/blob/main/app/main.py#L352-L418

@@ -1,18 +1,5 @@
 package conf
 
-/*
- Copyright 2019 - 2025 Crunchy Data Solutions, Inc.
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-      http://www.apache.org/licenses/LICENSE-2.0
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-*/
-
 import (
 	"fmt"
 	"os"
@@ -43,6 +30,10 @@ func setDefaultConfig() {
 	viper.SetDefault("Database.TableIncludes", []string{})
 	viper.SetDefault("Database.TableExcludes", []string{})
 	viper.SetDefault("Database.FunctionIncludes", []string{"postgisftw"})
+	viper.SetDefault("Database.MaxOpenConns", 25)
+	viper.SetDefault("Database.MaxIdleConns", 5)
+	viper.SetDefault("Database.ConnMaxLifetime", 3600) // 1 hour in seconds
+	viper.SetDefault("Database.ConnMaxIdleTime", 600)  // 10 minutes in seconds
 
 	viper.SetDefault("Paging.LimitDefault", 10)
 	viper.SetDefault("Paging.LimitMax", 1000)
@@ -100,6 +91,10 @@ type Database struct {
 	TableIncludes    []string
 	TableExcludes    []string
 	FunctionIncludes []string
+	MaxOpenConns     int // Maximum number of open connections to the database
+	MaxIdleConns     int // Maximum number of idle connections in the pool
+	ConnMaxLifetime  int // Maximum lifetime of a connection in seconds
+	ConnMaxIdleTime  int // Maximum idle time of a connection in seconds
 }
 
 // Metadata config

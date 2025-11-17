@@ -2,8 +2,6 @@
 
 A lightweight MVT (Mapbox Vector Tile) server for DuckDB with spatial extension support.
 
-This project is adapted from [`pg_featureserv`](https://github.com/CrunchyData/pg_featureserv) by Crunchy Data Solutions, refactored to work with DuckDB Spatial instead of PostgreSQL/PostGIS.
-
 ## API
 
 - [x] Determine response format from request headers `Content-Type`, `Accept`

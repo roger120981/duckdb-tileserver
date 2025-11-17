@@ -371,6 +371,12 @@ export DUCKDBTS_DATABASE_TABLEEXCLUDES="temp_table,staging"
 
 # Function includes (comma-separated, default: "postgisftw")
 export DUCKDBTS_DATABASE_FUNCTIONINCLUDES="func1,func2"
+
+# Connection pool settings (for performance tuning)
+export DUCKDBTS_DATABASE_MAXOPENCONNS=25        # Max open connections (default: 25)
+export DUCKDBTS_DATABASE_MAXIDLECONNS=5         # Max idle connections (default: 5)
+export DUCKDBTS_DATABASE_CONNMAXLIFETIME=3600   # Connection max lifetime in seconds (default: 3600)
+export DUCKDBTS_DATABASE_CONNMAXIDLETIME=600    # Idle connection timeout in seconds (default: 600)
 ```
 
 #### Server Configuration
@@ -583,9 +589,16 @@ This creates four sample layers:
    CREATE INDEX buildings_geom_idx ON buildings USING RTREE (geom);
    ```
 2. **Coordinate Reference System**: Store data in EPSG:3857 (Web Mercator) to avoid transformation overhead
-3. **Connection Pooling**: The Go database/sql package handles connection pooling automatically
-4. **Table Filtering**: Use `TableIncludes` to serve only necessary tables
-5. **Zoom Levels**: Consider creating pre-aggregated tables for lower zoom levels
+3. **Connection Pooling**: Configure connection pool settings based on your workload:
+   - `MaxOpenConns`: Set to 2-4x your CPU cores (default: 25)
+   - `MaxIdleConns`: Keep warm connections available (default: 5)
+   - The server uses a shared connection pool to efficiently handle concurrent tile requests
+4. **Caching**: The built-in LRU cache significantly reduces database load:
+   - Layer metadata is automatically cached to eliminate repeated queries
+   - Tile cache can store up to 10,000 tiles (configurable)
+   - Browser caching reduces server requests (default: 1 hour)
+5. **Table Filtering**: Use `TableIncludes` to serve only necessary tables
+6. **Zoom Levels**: Consider creating pre-aggregated tables for lower zoom levels
 
 ## Troubleshooting
 
@@ -644,24 +657,3 @@ Debug = true
 │  Spatial Ext.   │
 └─────────────────┘
 ```
-
-## License
-
-Copyright 2019 - 2025 Crunchy Data Solutions, Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-## Credits
-
-This project is adapted from [`pg_featureserv`](https://github.com/CrunchyData/pg_featureserv)
-by Crunchy Data Solutions, refactored to work with DuckDB Spatial instead of PostgreSQL/PostGIS.
